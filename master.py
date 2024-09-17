@@ -2,7 +2,7 @@
 if __name__ == "__main__":
     from pybricks.iodevices import I2CDevice
     from pybricks.ev3devices import Motor
-    from pybricks.parameters import Port, Stop, Direction
+    from pybricks.parameters import Port, Direction
     from pybricks.robotics import DriveBase
     import math
     from pybricks.messaging import BluetoothMailboxServer, TextMailbox
@@ -303,49 +303,9 @@ if __name__ == "__main__":
         def get_strength(self):
             data = self.read()
             return data[1]
-
-    class Wheels:
-        def __init__(self, forward_port: Port, backward_port: Port, left_port: Port, right_port: Port, init_pos: tuple[float, float], pos_scale_coefs: tuple[int, int] = (9, 12)) -> None:
-            self.forward = Motor(forward_port)
-            self.backward = Motor(backward_port)
-            self.left = Motor(left_port)
-            self.right = Motor(right_port)
-            self.diameter = 50 #mm
-            self.circumference = math.pi * self.diameter
-            self.init_pos = init_pos
-            self.pos_scale_coefs = pos_scale_coefs
-            self.forward.reset_angle(0)
-            self.backward.reset_angle(0)
-            self.left.reset_angle(0)
-            self.right.reset_angle(0)
-        def drive(self, direction:int, distance:int) -> None:
-            vertical_mod = math.cos(direction)
-            horizontal_mod = math.sin(direction)
-            target_angle = distance/self.circumference*360
-            print(vertical_mod, target_angle)
-            print(abs(vertical_mod),target_angle*(vertical_mod**0))
-            self.forward.run_angle(abs(vertical_mod),math.copysign(target_angle,vertical_mod),Stop.HOLD,False)
-            self.backward.run_angle(abs(vertical_mod),-math.copysign(target_angle,vertical_mod),Stop.HOLD,False)
-            self.left.run_angle(abs(horizontal_mod),-math.copysign(target_angle,vertical_mod),Stop.HOLD,False)
-            self.right.run_angle(abs(horizontal_mod),math.copysign(target_angle,vertical_mod),Stop.HOLD,False)
-            # self.forward.run_angle(1,180,Stop.HOLD,False)
-            # self.backward.run_angle(1,-180,Stop.HOLD,False)
-            # self.left.run_angle(1,180,Stop.HOLD,False)
-            # self.right.run_angle(1,180,Stop.HOLD,False)
-        def stop(self) -> None:
-            self.forward.stop()
-            self.backward.stop()
-            self.left.stop()
-            self.right.stop()
-        def get_x(self) -> int:
-            return math.floor((((self.right.angle() - self.left.angle()) / 720 * self.circumference) + self.init_pos[0])/self.pos_scale_coefs[0]) # get both for better accuracy
-        def get_y(self) -> int:
-            return math.floor((((self.backward.angle() - self.forward.angle()) / 720 * self.circumference) + self.init_pos[1])/self.pos_scale_coefs[1])
-        def get_pos(self) -> Vector2:
-            return Vector2(self.get_x(),self.get_y())
     
     class DriveBaseWheels:
-        def __init__(self, forward_port: Port, backward_port: Port, left_port: Port, right_port: Port, init_pos: tuple[float, float], pos_scale_coefs: tuple[int, int] = (9, 12), use_gyro:Bool = False) -> None:
+        def __init__(self, forward_port: Port, backward_port: Port, left_port: Port, right_port: Port, init_pos: tuple[float, float], pos_scale_coefs: tuple[int, int] = (20, 20), use_gyro:bool = True) -> None:
             self.forward = Motor(forward_port, Direction.COUNTERCLOCKWISE)
             self.backward = Motor(backward_port)
             self.left = Motor(left_port, Direction.COUNTERCLOCKWISE)
@@ -362,20 +322,19 @@ if __name__ == "__main__":
         def drive(self, direction:int, distance:int) -> None:
             vertical_mod = math.cos(direction)
             horizontal_mod = math.sin(direction)
-            forwards_drive.straight(distance*vertical_mod,wait=False)
-            sideways_drive.straight(distance*horizontal_mod,wait=False)
+            self.forwards_drive.straight(distance*vertical_mod,wait=False)
+            self.sideways_drive.straight(distance*horizontal_mod,wait=False)
         def stop(self) -> None:
             self.forward.stop()
             self.backward.stop()
             self.left.stop()
             self.right.stop()
         def get_x(self) -> int:
-            return math.floor((sideways_drive.distance() + self.init_pos[0])/self.pos_scale_coefs[0]) # get both for better accuracy
+            return math.floor((self.sideways_drive.distance() + self.init_pos[0])/self.pos_scale_coefs[0])
         def get_y(self) -> int:
-            return math.floor((forwards_drive.distance() + self.init_pos[1])/self.pos_scale_coefs[1])
+            return math.floor((self.forwards_drive.distance() + self.init_pos[1])/self.pos_scale_coefs[1])
         def get_pos(self) -> Vector2:
             return Vector2(self.get_x(),self.get_y())
-
 
     class Bot:
 
@@ -405,7 +364,7 @@ if __name__ == "__main__":
             self.qlearning_connected = QLearning([[i, j] for i in range(-1, 8) for j in range(-1, 8)], True)
             self.qlearning_disconnected = QLearning([[i] for i in range(-1, 8)], False)
             self.ir = IRSeeker(Port.S1)
-            self.wheels = Wheels(Port.A, Port.D, Port.C, Port.B,(71.5, 60))
+            self.wheels = DriveBaseWheels(Port.A, Port.D, Port.C, Port.B,(71.5, 60))
 
             if is_training:
 
