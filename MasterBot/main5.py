@@ -2,10 +2,12 @@
 if __name__ == "__main__":
     from pybricks.iodevices import I2CDevice
     from pybricks.ev3devices import Motor
-    from pybricks.parameters import Port, Direction
+    from pybricks.parameters import Port, Direction, Stop
     from pybricks.robotics import DriveBase
+    from pybricks.hubs import EV3Brick
+    from pybricks.tools import multitask, run_task
     import math
-    from pybricks.messaging import BluetoothMailboxClient, TextMailbox
+    from pybricks.messaging import BluetoothMailboxServer, TextMailbox
     import ujson
 
     class Random:
@@ -13,7 +15,7 @@ if __name__ == "__main__":
         # values except for m can be changed freely (m must be prime). for best results, numbers should be around the same order of magnitude
         # algo is LGA
 
-        def __init__(self, a=93024524, c=4523524, m=2147483647, seed=388454674):
+        def __init__(self, a=93024524, c=4523624, m=2147483647, seed=7192650892):
 
             self.a = a
             self.c = c
@@ -93,21 +95,67 @@ if __name__ == "__main__":
 
         def __init__(self, possible_actions, connected, open_from_file=False, a=0.1, g=0.9, l=0.99, e=0.05): # a is learning rate, g is future discount rate, l is elegibility trace discount rate, e is epsilon for epsilon-greedy
 
-            default_dict = dict()
-
             self.connected = connected
 
-            for possible_action in possible_actions:
-
-                default_dict[str(possible_action)] = 0.0
-
             self.possible_actions = possible_actions
-            self.default_dict = default_dict
             self.q_table = dict() if not open_from_file else ujson.loads(open("q_table_master_connected.pkl" if self.connected else "q_table_master_connected.pkl").read())
             self.a = a
             self.g = g
             self.e = e
             self.l = l
+            self.grid_bounds = [9,12]
+
+        # intended for class-private use only 
+        def _filter_possible_actions(self, state):
+
+            filtered_possible_actions = list()
+
+            for i in range(len(self.possible_actions)):
+
+                is_valid = True
+
+                for j in range(len(self.possible_actions[i])):
+
+                    if (self.possible_actions[i][j] in [1,2,3]) and state[i*4] >= self.grid_bounds[0]:
+
+                        is_valid = False
+                        break
+
+                    if (self.possible_actions[i][j] in [5,6,7]) and state[i*4] <= 0:
+
+                        is_valid = False
+                        break
+
+                    if (self.possible_actions[i][j] in [7,0,1]) and state[i*4 + 1] >= self.grid_bounds[1]:
+
+                        is_valid = False
+                        break
+
+                    if (self.possible_actions[i][j] in [3,4,5]) and state[i*4 + 1] <= 0:
+
+                        is_valid = False
+                        break
+
+                if is_valid:
+
+                    filtered_possible_actions.append(self.possible_actions[i])
+
+            return filtered_possible_actions
+
+        # intended for class-private use only 
+        def _generate_starting_state_dict(self, state):
+
+            if self.connected:
+
+                return {str(action): \
+                sum([0.1 if (False if (state[i*4 + 2] == 0) else action[i] == ((round((state[i*4 + 2]/12)*8)) % 8)) \
+                else -0.02 for i in range(2)]) for action in self._filter_possible_actions(state)}
+            
+            else:
+
+                return {str(action): \
+                0.1 if (False if (state[2] == 0) else action[0] == ((round((state[2]/12)*8)) % 8)) \
+                else -0.1 for action in for action in self._filter_possible_actions(state)}
 
         # intended for class-private use only 
         # will select action based using epsilon greedy on dict representing the possible actions in the state and the Q-values of each possible action 
@@ -128,7 +176,7 @@ if __name__ == "__main__":
 
                 for action in actions:
 
-                    if (action_dict[action] > max_q_value):
+                    if (action_dict[action] > max_q_value or (action_dict[action] == max_q_value and random.float() < 0.5)):
                         
                         max_action = action
                         max_q_value = action_dict[action]
@@ -153,19 +201,19 @@ if __name__ == "__main__":
                 dx = 0
                 dy = 0
 
-                if state_action_pair[1][i] in [1, 2, 3]:
+                if state_action_pair[1][4*i] in [1, 2, 3]:
 
                     dx = 1
 
-                if state_action_pair[1][i] in [5, 6, 7]:
+                if state_action_pair[1][4*i] in [5, 6, 7]:
 
                     dx = -1
 
-                if state_action_pair[1][i] in [7, 0, 1]:
+                if state_action_pair[1][4*i] in [7, 0, 1]:
 
                     dy = 1
 
-                if state_action_pair[1][i] in [5, 4, 3]:
+                if state_action_pair[1][4*i] in [5, 4, 3]:
 
                     dy = -1
 
@@ -182,7 +230,7 @@ if __name__ == "__main__":
 
             if not action_dict:
 
-                self.q_table[str(state)] = copy_dict(self.default_dict)
+                self.q_table[str(state)] = self._generate_starting_state_dict(state)
 
             return self._epsilon_greedy(self.q_table[str(state)], training)
         
@@ -200,7 +248,7 @@ if __name__ == "__main__":
 
                 if not action_dict:
 
-                    self.q_table[str(state_action_pair[0])] = copy_dict(self.default_dict)
+                    self.q_table[str(state_action_pair[0])] = self._generate_starting_state_dict(state_action_pair[0])
                     action_dict = self.q_table[str(state_action_pair[0])]
 
                 prev_q_value = action_dict[str(state_action_pair[1])] or 0.0
@@ -217,13 +265,13 @@ if __name__ == "__main__":
 
                 if self.connected:
 
-                    with open('q_table_slave_connected.pkl', 'w') as file:
+                    with open('q_table_master_connected.pkl', 'w') as file:
                 
                         file.write(serialized_q_table)
 
                 else:
 
-                    with open('q_table_slave_disconnected.pkl', 'w') as file:
+                    with open('q_table_master_disconnected.pkl', 'w') as file:
                 
                         file.write(serialized_q_table)
 
@@ -233,13 +281,13 @@ if __name__ == "__main__":
 
             if self.connected:
 
-                with open('q_table_slave_connected.pkl', 'w') as file:
+                with open('q_table_master_connected.pkl', 'w') as file:
                 
                     file.write(serialized_q_table)
 
             else:
 
-                with open('q_table_slave_disconnected.pkl', 'w') as file:
+                with open('q_table_master_disconnected.pkl', 'w') as file:
                 
                     file.write(serialized_q_table)
 
@@ -288,7 +336,7 @@ if __name__ == "__main__":
             self.sensor = I2CDevice(port, 0x08)
         def read(self):
             data = self.sensor.read(2,2)
-            return (data[0], data[1])
+            return (0 if data[0] == 0 else (((data[0] - 1)%12) or 12), data[1], data[0])
         def get_direction(self):
             data = self.read()
             return data[0]
@@ -297,7 +345,7 @@ if __name__ == "__main__":
             return data[1]
 
     class DriveBaseWheels:
-        def __init__(self, forward_port: Port, backward_port: Port, left_port: Port, right_port: Port, init_pos: tuple[float, float], pos_scale_coefs: tuple[int, int] = (20, 20), use_gyro:bool = True) -> None:
+        def __init__(self, forward_port: Port, backward_port: Port, left_port: Port, right_port: Port, init_pos: tuple[float, float], pos_scale_coefs: tuple[int, int] = (20, 20)) -> None:
             self.forward = Motor(forward_port, Direction.COUNTERCLOCKWISE)
             self.backward = Motor(backward_port)
             self.left = Motor(left_port, Direction.COUNTERCLOCKWISE)
@@ -307,54 +355,53 @@ if __name__ == "__main__":
             self.circumference = math.pi * self.diameter
             self.init_pos = init_pos
             self.pos_scale_coefs = pos_scale_coefs
-            self.forwards_drive = DriveBase(self.left, self.right, wheeldiameter=self.diameter, axle_track = self.axle_track)
-            self.sideways_drive = DriveBase(self.forward, self.backward, wheeldiameter=self.diameter, axle_track = self.axle_track)
-            self.forwards_drive.use_gyro(use_gyro)
-            self.sideways_drive.use_gyro(use_gyro)
+            
         def drive(self, direction:int, distance:int) -> None:
-            vertical_mod = math.cos(direction)
-            horizontal_mod = math.sin(direction)
-            self.forwards_drive.straight(distance*vertical_mod,wait=False)
-            self.sideways_drive.straight(distance*horizontal_mod,wait=False)
+            print(direction)
+            vertical_mod = math.cos(math.radians(direction))
+            horizontal_mod = math.sin(math.radians(direction))
+            DriveBase(self.left, self.right, wheel_diameter=self.diameter, axle_track = self.axle_track).straight(round(distance*vertical_mod))
+            DriveBase(self.forward, self.backward, wheel_diameter=self.diameter, axle_track = self.axle_track).straight(round(distance*horizontal_mod))
         def stop(self) -> None:
-            self.forward.stop()
-            self.backward.stop()
-            self.left.stop()
-            self.right.stop()
+            DriveBase(self.left, self.right, wheel_diameter=self.diameter, axle_track = self.axle_track).hold()
+            DriveBase(self.forward, self.backward, wheel_diameter=self.diameter, axle_track = self.axle_track).hold()
         def get_x(self) -> int:
-            return math.floor((self.sideways_drive.distance() + self.init_pos[0])/self.pos_scale_coefs[0])
+            return 0; return math.floor((self.sideways_drive.distance() + self.init_pos[0])/self.pos_scale_coefs[0])
         def get_y(self) -> int:
-            return math.floor((self.forwards_drive.distance() + self.init_pos[1])/self.pos_scale_coefs[1])
+            return 0; return math.floor((self.forwards_drive.distance() + self.init_pos[1])/self.pos_scale_coefs[1])
         def get_pos(self) -> Vector2:
             return Vector2(self.get_x(),self.get_y())
-        
+
     class Bot:
 
-        def __init__(self, is_training: bool):
+        def __init__(self, is_training: bool, connected=True):
 
             self.MM_SCALE_COEF = 100
             self.IR_SCALE_COEF = 10
 
             self.is_training = is_training
 
-            self.connected = True
+            self.connected = connected
 
-            try:
+            if connected:
 
-                self.client = BluetoothMailboxClient()
+                try:
 
-            except OSError:
+                    self.server = BluetoothMailboxServer()
 
-                self.disconnect()
+                    self.server.wait_for_connection()
 
-            # needs to connect to server
+                except OSError:
 
-            self.mbox = TextMailbox("communication", self.client)
+                    self.disconnect()
 
-            self.qlearning_connected = QLearning([(i, j) for i in range(-1, 8) for j in range(-1, 8)])
-            self.qlearning_disconnected = QLearning([i for i in range(-1, 8)])
-            self.ir = IRSeeker()
-            self.wheels = DriveBaseWheels()
+                self.mbox = TextMailbox("communication", self.server)
+
+            self.qlearning_connected = QLearning([[i, j] for i in range(-1, 8) for j in range(-1, 8)], True)
+            self.qlearning_disconnected = QLearning([[i] for i in range(-1, 8)], False)
+            self.ir = IRSeeker(Port.S2)
+            self.wheels = DriveBaseWheels(Port.A, Port.B, Port.C, Port.D,(71.5, 60))
+            self.hub = EV3Brick()
 
             if is_training:
 
@@ -364,54 +411,69 @@ if __name__ == "__main__":
 
             self.connected = False
 
-            self.client.close()
-            self.timer.deinit()
+            self.server.close()
 
         def main_loop(self):
 
+            print("in main loop")
+
             while True:
 
-                x_pos, y_pos = self.wheels.get_pos()
+                print("loop iter")
+
+                x_pos, y_pos = self.wheels.get_pos().to_tuple()
 
                 x_coord = int(x_pos/self.MM_SCALE_COEF)
                 y_coord = int(y_pos/self.MM_SCALE_COEF)
 
-                ir_bearing = self.ir.get_direction()
-                ir_distance = int(self.ir.get_strength()/self.IR_SCALE_COEF)
+                ir_bearing, ir_distance, ir_bearing_raw = self.ir.read()
 
-                state = [x_coord, y_coord, ir_bearing, ir_distance]
+                action_self = -1
 
-                action = -1
+                state_self = [x_coord, y_coord, ir_bearing, ir_distance]
 
                 if self.connected:
-                
+
+                    self.mbox.wait()
+
+                    state_client = ""
+
+                    while state_client == "": # TODO: implement a max_iter on this loop
+                        
+                            self.mbox.wait()
+                            state_client = int(self.mbox.read())
+
+                    state = state_self + state_client
+
+                    action_self, action_client = self.qlearning_connected.get_action(state, False)
+
                     try:
-                    
-                        self.mbox.send(str(state))
+
+                        self.mbox.send(str(action_client))
 
                     except OSError:
-                    
+
                         self.disconnect()
 
-                        action = self.qlearning_disconnected.get_action(state, False)
-
-                    action = ""
-
-                    while action == "": # TODO: implement a max_iter on this loop
-                        
-                        self.mbox.wait()
-                        action = int(self.mbox.read())
+                        action_self = self.qlearning_disconnected.get_action(state, False)[0]
 
                 else:
-                
-                    action = self.qlearning_disconnected.get_action(state, False)
 
-                if action == -1:
-                
+                    action_self = self.qlearning_disconnected.get_action(state_self, False)[0]
+
+                self.hub.screen.clear()
+                self.hub.screen.print("IR bearing: " + str(ir_bearing) + "\nRaw IR bearing: " + str(ir_bearing_raw) + "\nIR distance: " + str(ir_distance) + "\nAction: " + str(action_self))
+
+                if action_self == -1:
+
                     self.wheels.stop()
 
                 else:
-                
-                    move_dir = action*45
+
+                    move_dir = action_self*45
 
                     self.wheels.drive(move_dir, self.MM_SCALE_COEF)
+
+print("starting")
+bot = Bot(False, connected=False)
+bot.main_loop()
