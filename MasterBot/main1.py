@@ -2,7 +2,7 @@
 if __name__ == "__main__":
     from pybricks.iodevices import I2CDevice
     from pybricks.ev3devices import Motor
-    from pybricks.parameters import Port, Direction, Stop
+    from pybricks.parameters import Port, Direction, Stop, Button
     from pybricks.robotics import DriveBase
     from pybricks.hubs import EV3Brick
     from pybricks.tools import multitask, run_task
@@ -141,6 +141,29 @@ if __name__ == "__main__":
                     filtered_possible_actions.append(self.possible_actions[i])
 
             return filtered_possible_actions
+        
+        def _get_state_action_pair_base_q_value(self, state, action):
+
+            base_q_value = 0
+
+            if self.connected:
+
+                # move towards ball
+                base_q_value += sum([0.1 if (False if (state[i*4 + 2] == 0) else action[i] == ((round((state[i*4 + 2]/12)*8)) % 8)) else -0.02 for i in range(2)])
+
+                for i in range(2):
+
+                    # kick ball towards goal
+                    if state[i*4 + 3] > 80 and action[i] == (round((state[i*4 + 2]/12)*8)) and action[i] in [7,0,1]:
+
+                        best_q_value += 0.2
+            
+            else:
+
+                # move towards ball
+                base_q_value +=  0.1 if (False if (state[2] == 0) else action[0] == ((round((state[2]/12)*8)) % 8)) else -0.1
+            
+            return base_q_value
 
         # intended for class-private use only 
         def _generate_starting_state_dict(self, state):
@@ -155,7 +178,7 @@ if __name__ == "__main__":
 
                 return {str(action): \
                 0.1 if (False if (state[2] == 0) else action[0] == ((round((state[2]/12)*8)) % 8)) \
-                else -0.1 for action in for action in self._filter_possible_actions(state)}
+                else -0.1 for action in self._filter_possible_actions(state)}
 
         # intended for class-private use only 
         # will select action based using epsilon greedy on dict representing the possible actions in the state and the Q-values of each possible action 
@@ -378,6 +401,49 @@ if __name__ == "__main__":
         def get_pos(self) -> Vector2:
             return Vector2(self.get_x(),self.get_y())
 
+    class InputManager:
+
+        def __init__(self, qLearning: QLearning, hub: EV3Brick, connected: bool):
+
+            self.qLearning = qLearning
+            self.hub = hub
+            self.connected = connected
+
+            self.in_play = False
+            self.is_master = False
+
+        def _is_btn_pressed(self, btn):
+
+            return btn in self.hub.buttons.pressed()
+
+        def input_tick(self, state_action_pairs: list):
+
+            if not self.in_play and self._is_btn_pressed(Button.CENTER):
+
+                self.is_master = not self.is_master
+
+            if self._is_btn_pressed(Button.UP):
+
+                self.in_play = True
+
+            elif self._is_btn_pressed(Button.Down):
+
+                self.in_play = False
+
+            elif not self.in_play and self._is_btn_pressed(Button.LEFT):
+
+                self.qLearning.update_q_values(state_action_pairs, -1*(self.connected or (not self.is_master)), True)
+
+                return list()
+
+            elif not self.in_play and self._is_btn_pressed(Button.RIGHT):
+
+                self.qLearning.update_q_values(state_action_pairs, 1*(self.connected or self.is_master), True)
+
+                return list()
+            
+            return state_action_pairs
+
     class Bot:
 
         def __init__(self, is_training: bool, connected=True):
@@ -406,8 +472,10 @@ if __name__ == "__main__":
             self.qlearning_connected = QLearning([[i, j] for i in range(-1, 8) for j in range(-1, 8)], True)
             self.qlearning_disconnected = QLearning([[i] for i in range(-1, 8)], False)
             self.ir = IRSeeker(Port.S2)
-            self.wheels = DriveBaseWheels(Port.A, Port.B, Port.C, Port.D,(71.5, 60))
+            self.wheels = Wheels(Port.A, Port.B, Port.C, Port.D,(71.5, 60))
             self.hub = EV3Brick()
+            self.input_manager_connected = InputManager(self.qlearning_connected, self.hub, True)
+            self.input_manager_disconnected = InputManager(self.qlearning_disconnected, self.hub, False)
 
             if is_training:
 
@@ -434,20 +502,36 @@ if __name__ == "__main__":
 
                 ir_bearing, ir_distance, ir_bearing_raw = self.ir.read()
 
+                self.hub.screen.clear()
+                self.hub.screen.print("IR bearing: " + str(ir_bearing) + \
+                                      "\nRaw IR bearing: " + str(ir_bearing_raw) + \
+                                      "\nIR distance: " + str(ir_distance) + \
+                                      "\nMode:" + ("Master" if (self.input_manager_connected if self.connected else self.input_manager_disconnected).is_master else "Slave"))
+
                 action_self = -1
 
                 state_self = [x_coord, y_coord, ir_bearing, ir_distance]
 
                 if self.connected:
 
+                    if not self.input_manager_connected.in_play:
+
+                        continue
+
+                    self.state_action_pairs = self.input_manager_connected.input_tick(self.state_action_pairs)
+
                     self.mbox.wait()
 
                     state_client = ""
 
-                    while state_client == "": # TODO: implement a max_iter on this loop
+                    i = 0
+
+                    while state_client == "" and i < 100:
                         
                             self.mbox.wait()
                             state_client = int(self.mbox.read())
+
+                            i+=1
 
                     state = state_self + state_client
 
@@ -465,10 +549,13 @@ if __name__ == "__main__":
 
                 else:
 
-                    action_self = self.qlearning_disconnected.get_action(state_self, False)[0]
+                    if not self.input_manager_disconnected.in_play:
 
-                self.hub.screen.clear()
-                self.hub.screen.print("IR bearing: " + str(ir_bearing) + "\nRaw IR bearing: " + str(ir_bearing_raw) + "\nIR distance: " + str(ir_distance) + "\nAction: " + str(action_self))
+                        continue
+
+                    self.state_action_pairs = self.input_manager_disconnected.input_tick(self.state_action_pairs)
+
+                    action_self = self.qlearning_disconnected.get_action(state_self, False)[0]
 
                 if action_self == -1:
 
