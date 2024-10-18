@@ -3,9 +3,7 @@ if __name__ == "__main__":
     from pybricks.iodevices import I2CDevice
     from pybricks.ev3devices import Motor
     from pybricks.parameters import Port, Direction, Stop, Button
-    from pybricks.robotics import DriveBase
     from pybricks.hubs import EV3Brick
-    from pybricks.tools import multitask, run_task
     import math
     from pybricks.messaging import BluetoothMailboxServer, TextMailbox
     import ujson
@@ -568,5 +566,5 @@ if __name__ == "__main__":
                     self.wheels.drive(move_dir, self.MM_SCALE_COEF)
 
 print("starting")
-bot = Bot(False, connected=False)
+bot = Bot(True, connected=False)
 bot.main_loop()
